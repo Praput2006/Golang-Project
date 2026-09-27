@@ -1,0 +1,9 @@
+# ก๊อปไปวางใต้ `services:` ในไฟล์ kong.yml กลาง
+  - name: facility-service
+    url: http://facility-service:8082
+    routes:
+      - name: facility-routes
+        paths:
+          - /api/facilities
+          - /api/reports/facilities
+        strip_path: false

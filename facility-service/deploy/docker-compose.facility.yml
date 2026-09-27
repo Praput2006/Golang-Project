@@ -1,0 +1,28 @@
+# ก๊อปไปวางใต้ `services:` ใน docker-compose.yml กลาง
+  facility-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: facility_db
+      TZ: Asia/Bangkok
+    ports:
+      - "5433:5432"
+    volumes:
+      - facility-db-data:/var/lib/postgresql/data
+
+  facility-service:
+    build: ./facility-service
+    environment:
+      PORT: "8082"
+      DATABASE_URL: host=facility-db user=postgres password=postgres dbname=facility_db port=5432 sslmode=disable TimeZone=Asia/Bangkok
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_REALM: facility-booking
+    ports:
+      - "8082:8082"
+    depends_on:
+      - facility-db
+      - keycloak
+
+# และเพิ่มใต้ `volumes:` ระดับบนสุด
+#   facility-db-data:
