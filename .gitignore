@@ -1,0 +1,22 @@
+# ค่าตั้งค่าในเครื่องและรหัสผ่าน ห้ามขึ้น git
+.env
+.env.local
+
+# ไฟล์ที่ build ได้เอง
+*.exe
+bin/
+dist/
+build/
+
+# frontend
+node_modules/
+
+# editor / ระบบปฏิบัติการ
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+~$*
+
+# เอกสารโปรเจกต์ เก็บไว้ในเครื่อง ไม่ขึ้น git
+Documents/

@@ -1,0 +1,198 @@
+openapi: 3.0.3
+info:
+  title: Auth & User Service
+  version: 1.0.0
+  description: |
+    University Facility Booking System — Auth & User Service (ผู้รับผิดชอบ: นางสาวณธิดา กาฬหว้า)
+
+    login ผ่าน Keycloak (realm `unibook`) แล้วนำ access token มาใส่ปุ่ม **Authorize**
+    role อ่านจาก `realm_access.roles` ใน token (USER / STAFF / ADMIN)
+servers:
+  - { url: http://localhost:8081, description: เรียก service ตรง }
+  - { url: http://localhost:8000, description: เรียกผ่าน Kong API Gateway }
+
+paths:
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      summary: สมัครสมาชิกใหม่ (หมวด 1 Create)
+      description: สร้างบัญชีใน Keycloak พร้อม role USER แล้วบันทึกลง auth_db ไม่ต้อง login
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RegisterRequest' } } } }
+      responses:
+        '201': { $ref: '#/components/responses/User' }
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+
+  /api/users:
+    get:
+      tags: [Users]
+      summary: Admin ดูรายชื่อ User (หมวด 2 List)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: q, in: query, description: ค้นหาจาก username, email, ชื่อ, นามสกุล, schema: { type: string } }
+        - { name: role, in: query, schema: { type: string, enum: [USER, STAFF, ADMIN] } }
+        - { name: status, in: query, schema: { type: string, enum: [ACTIVE, DEACTIVATED] } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 10, maximum: 100 } }
+      responses:
+        '200': { description: รายชื่อ User, content: { application/json: { schema: { $ref: '#/components/schemas/UserList' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /api/users/me:
+    get:
+      tags: [Users]
+      summary: ดูข้อมูลของผู้ใช้ที่ login (หมวด 3 Read own)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/User' }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/users/{id}:
+    parameters: [{ $ref: '#/components/parameters/UserID' }]
+    get:
+      tags: [Users]
+      summary: ดู User รายคน (Admin/Staff และให้ service อื่นตรวจว่ามี user จริง)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/User' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    put:
+      tags: [Users]
+      summary: Admin แก้ไขข้อมูล User (หมวด 4 Update)
+      description: แก้ทั้งใน auth_db และ Keycloak ให้ตรงกัน (username แก้ไม่ได้)
+      security: [{ bearerAuth: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateUserRequest' } } } }
+      responses:
+        '200': { $ref: '#/components/responses/User' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+
+  /api/users/{id}/deactivate:
+    parameters: [{ $ref: '#/components/parameters/UserID' }]
+    put:
+      tags: [Users]
+      summary: Admin ระงับการใช้งานบัญชี (หมวด 5 Delete/Cancel)
+      description: ตั้ง status เป็น DEACTIVATED และปิดบัญชีใน Keycloak — 409 ถ้าระงับตัวเอง หรือถูกระงับอยู่แล้ว
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/User' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+
+  /api/users/{id}/role:
+    parameters: [{ $ref: '#/components/parameters/UserID' }]
+    put:
+      tags: [Users]
+      summary: Admin เปลี่ยน Role ของ User (หมวด 6 Special business rule)
+      description: |
+        เปลี่ยน role ทั้งใน auth_db และ Keycloak (มีผลกับ token ครั้งถัดไป)
+        - เปลี่ยน role ตัวเองไม่ได้ (409) กันระบบไม่เหลือ Admin
+        - เปลี่ยน role ของบัญชีที่ถูกระงับไม่ได้ (409)
+        - ถ้าเป็น role เดิมอยู่แล้ว ตอบ 200 โดยไม่เปลี่ยนอะไร
+      security: [{ bearerAuth: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ChangeRoleRequest' } } } }
+      responses:
+        '200': { $ref: '#/components/responses/User' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+
+  /api/reports/users/summary:
+    get:
+      tags: [Reports]
+      summary: Admin ดูสถิติผู้ใช้งาน (หมวด 7 Report)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: สถิติผู้ใช้งาน, content: { application/json: { schema: { $ref: '#/components/schemas/UserSummary' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+
+  parameters:
+    UserID: { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+
+  responses:
+    User:
+      description: ข้อมูล User
+      content: { application/json: { schema: { $ref: '#/components/schemas/User' } } }
+    Error:
+      description: |
+        400 ข้อมูลไม่ถูกต้อง · 401 ไม่มี token หรือ token ไม่ถูกต้อง · 403 role ไม่มีสิทธิ์ ·
+        404 ไม่พบ User · 409 ข้อมูลซ้ำหรือขัดกับกฎ · 502 เรียก Keycloak ไม่สำเร็จ
+      content: { application/json: { schema: { type: object, properties: { error: { type: string } } } } }
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id: { type: integer, example: 1 }
+        keycloak_id: { type: string }
+        username: { type: string, example: nathida }
+        email: { type: string, example: nathida@ubu.ac.th }
+        first_name: { type: string, example: Nathida }
+        last_name: { type: string, example: Kalawa }
+        role: { type: string, enum: [USER, STAFF, ADMIN] }
+        status: { type: string, enum: [ACTIVE, DEACTIVATED] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    RegisterRequest:
+      type: object
+      required: [username, email, password, first_name, last_name]
+      properties:
+        username: { type: string, minLength: 3, maxLength: 50, pattern: '^[a-z0-9._-]+$', example: nathida }
+        email: { type: string, format: email, example: nathida@ubu.ac.th }
+        password: { type: string, format: password, minLength: 8 }
+        first_name: { type: string, example: Nathida }
+        last_name: { type: string, example: Kalawa }
+
+    UpdateUserRequest:
+      type: object
+      required: [email, first_name, last_name]
+      properties:
+        email: { type: string, format: email }
+        first_name: { type: string }
+        last_name: { type: string }
+
+    ChangeRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role: { type: string, enum: [USER, STAFF, ADMIN] }
+
+    UserList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/User' } }
+        page: { type: integer, example: 1 }
+        limit: { type: integer, example: 10 }
+        total: { type: integer, example: 3 }
+
+    UserSummary:
+      type: object
+      properties:
+        total: { type: integer, example: 120 }
+        by_role: { type: object, additionalProperties: { type: integer }, example: { USER: 100, STAFF: 15, ADMIN: 5 } }
+        by_status: { type: object, additionalProperties: { type: integer }, example: { ACTIVE: 115, DEACTIVATED: 5 } }
+        new_last_30_days: { type: integer, example: 12 }

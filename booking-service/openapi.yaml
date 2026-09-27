@@ -1,0 +1,244 @@
+openapi: 3.0.3
+info:
+  title: Booking Service API
+  description: >
+    University Facility Booking System — Booking Service.
+    Owner: นายภาสกร พิจารณ์.
+    All paths below are shown as the gateway (Kong) sees them, i.e. prefixed
+    with /api. See ../kong/kong.yml for how Kong maps these onto the
+    service's internal routes, and ../TUTORIAL.md for the full explanation.
+  version: "1.0.0"
+servers:
+  - url: http://localhost:8000
+    description: Through Kong API Gateway (recommended)
+  - url: http://localhost:8083
+    description: Directly against booking-service (no /api prefix, no auth enforced by Kong — for local dev only)
+
+tags:
+  - name: bookings
+  - name: reports
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Booking:
+      type: object
+      properties:
+        id: { type: integer, example: 1001 }
+        facility_id: { type: integer, example: 1 }
+        date: { type: string, format: date, example: "2026-09-10" }
+        start_time: { type: string, example: "09:00" }
+        end_time: { type: string, example: "11:00" }
+        status:
+          type: string
+          enum: [PENDING, APPROVED, REJECTED, CANCELLED]
+    BookingSummary:
+      type: object
+      properties:
+        id: { type: integer, example: 1001 }
+        facility_name: { type: string, example: "Meeting Room A" }
+        date: { type: string, format: date, example: "2026-09-10" }
+        status:
+          type: string
+          enum: [PENDING, APPROVED, REJECTED, CANCELLED]
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+  parameters:
+    BookingId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /api/bookings:
+    post:
+      tags: [bookings]
+      summary: 1. Create — User จองห้อง/พื้นที่
+      description: Requires role USER.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [facility_id, date, start_time, end_time]
+              properties:
+                facility_id: { type: integer, example: 1 }
+                date: { type: string, format: date, example: "2026-09-10" }
+                start_time: { type: string, example: "09:00" }
+                end_time: { type: string, example: "11:00" }
+      responses:
+        "201":
+          description: Booking created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: "Booking created successfully" }
+                  booking: { $ref: "#/components/schemas/Booking" }
+        "400": { description: Invalid payload / facility not found / bad time range, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: Missing/invalid token, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: Time slot conflicts with an existing booking, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    get:
+      tags: [bookings]
+      summary: 2. List — ดูรายการจองตามสิทธิ์
+      description: >
+        Requires role USER, STAFF or ADMIN. USER sees only their own
+        bookings; STAFF/ADMIN see all bookings, narrowed by the filters
+        below.
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [PENDING, APPROVED, REJECTED, CANCELLED] }
+        - name: date
+          in: query
+          schema: { type: string, format: date }
+        - name: facility_id
+          in: query
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/BookingSummary" }
+                  total: { type: integer }
+        "401": { description: Missing/invalid token }
+        "403": { description: Insufficient permissions }
+
+  /api/bookings/my:
+    get:
+      tags: [bookings]
+      summary: 3. Read own — User ดูประวัติการจองของตนเอง
+      description: Requires role USER.
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [PENDING, APPROVED, REJECTED, CANCELLED] }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/BookingSummary" }
+        "401": { description: Missing/invalid token }
+
+  /api/bookings/{id}/approve:
+    put:
+      tags: [bookings]
+      summary: 4. Update — Staff/Admin อนุมัติการจอง
+      description: Requires role STAFF or ADMIN. Only a PENDING booking can be approved.
+      parameters:
+        - $ref: "#/components/parameters/BookingId"
+      responses:
+        "200":
+          description: Approved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: "Booking approved successfully" }
+                  booking_id: { type: integer }
+                  status: { type: string, example: "APPROVED" }
+        "403": { description: Insufficient permissions }
+        "404": { description: Booking not found }
+        "409": { description: Booking already processed, or conflicts with another approved booking }
+
+  /api/bookings/{id}/reject:
+    put:
+      tags: [bookings]
+      summary: 6. Special business rule — Staff/Admin ปฏิเสธการจอง พร้อมเหตุผล
+      description: Requires role STAFF or ADMIN. Only a PENDING booking can be rejected.
+      parameters:
+        - $ref: "#/components/parameters/BookingId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, example: "ห้องถูกสงวนไว้" }
+      responses:
+        "200":
+          description: Rejected
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: "Booking rejected successfully" }
+                  booking_id: { type: integer }
+                  status: { type: string, example: "REJECTED" }
+                  reason: { type: string }
+        "400": { description: Missing reason, or booking already processed }
+        "403": { description: Insufficient permissions }
+        "404": { description: Booking not found }
+
+  /api/bookings/{id}:
+    delete:
+      tags: [bookings]
+      summary: 5. Delete/Cancel — User ยกเลิกการจองของตนเอง
+      description: >
+        Requires role USER, and the booking must belong to the caller.
+        Implemented as a soft delete (status becomes CANCELLED) so booking
+        history and reports stay accurate.
+      parameters:
+        - $ref: "#/components/parameters/BookingId"
+      responses:
+        "204": { description: Cancelled, no content }
+        "401": { description: Missing/invalid token }
+        "403": { description: Not the booking's owner }
+        "404": { description: Booking not found }
+        "409": { description: Booking already CANCELLED or REJECTED }
+
+  /api/reports/bookings/summary:
+    get:
+      tags: [reports]
+      summary: 7. Domain Report — Admin ดูสรุปสถิติการจอง
+      description: Requires role ADMIN.
+      parameters:
+        - name: start_date
+          in: query
+          schema: { type: string, format: date }
+        - name: end_date
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_bookings: { type: integer, example: 150 }
+                  pending: { type: integer, example: 10 }
+                  approved: { type: integer, example: 120 }
+                  rejected: { type: integer, example: 15 }
+                  cancelled: { type: integer, example: 5 }
+        "401": { description: Missing/invalid token }
+        "403": { description: Insufficient permissions }

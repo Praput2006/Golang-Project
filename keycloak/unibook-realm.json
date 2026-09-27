@@ -1,0 +1,59 @@
+{
+  "realm": "unibook",
+  "displayName": "UniBook — University Facility Booking",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "accessTokenLifespan": 900,
+  "roles": {
+    "realm": [
+      { "name": "USER", "description": "ผู้ใช้ทั่วไป (นักศึกษา/บุคลากร) จองห้องได้" },
+      { "name": "STAFF", "description": "เจ้าหน้าที่ดูแลห้อง อนุมัติ/ปฏิเสธการจอง" },
+      { "name": "ADMIN", "description": "ผู้ดูแลระบบ" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "unibook-frontend",
+      "name": "UniBook Frontend (React)",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["http://localhost:5173/*", "http://localhost:3000/*"],
+      "webOrigins": ["+"]
+    },
+    {
+      "clientId": "auth-service",
+      "name": "Auth & User Service (service account)",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "auth-service-dev-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false
+    }
+  ],
+  "users": [
+    {
+      "id": "a0e1c7d2-0000-4000-8000-000000000001",
+      "username": "uniadmin",
+      "email": "uniadmin@unibook.local",
+      "firstName": "System",
+      "lastName": "Admin",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "UniAdmin@1234", "temporary": false }],
+      "realmRoles": ["ADMIN"]
+    },
+    {
+      "username": "service-account-auth-service",
+      "enabled": true,
+      "serviceAccountClientId": "auth-service",
+      "clientRoles": {
+        "realm-management": ["manage-users", "view-users", "view-realm"]
+      }
+    }
+  ]
+}

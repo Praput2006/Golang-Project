@@ -1,0 +1,46 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: auth-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: yourpassword
+      POSTGRES_DB: auth_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - auth-db-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: auth-keycloak
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    ports:
+      - "8080:8080"
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+      - ../keycloak:/opt/keycloak/data/import
+
+  auth-service:
+    build: .
+    container_name: auth-service
+    environment:
+      DATABASE_URL: postgres://postgres:yourpassword@postgres:5432/auth_db
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_REALM: unibook
+      KEYCLOAK_ISSUER: http://localhost:8080/realms/unibook
+      KEYCLOAK_CLIENT_ID: auth-service
+      KEYCLOAK_CLIENT_SECRET: auth-service-dev-secret
+    ports:
+      - "8081:8081"
+    depends_on:
+      - postgres
+      - keycloak
+
+volumes:
+  auth-db-data:
+  keycloak-data:
