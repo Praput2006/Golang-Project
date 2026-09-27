@@ -1,0 +1,247 @@
+# Notification Service — ไฟล์ทดสอบสำหรับ VS Code extension "REST Client"
+#
+# ก่อนใช้ — เปิดทั้งระบบด้วย compose กลาง (ที่ root ของ repo):
+#   docker compose -f docker-compose.example.yml -p unibook up -d --build auth-db keycloak auth-service notification-db notification-service
+#   docker compose -f docker-compose.example.yml -p unibook up -d --no-deps kong
+#
+# ทุก request ของผู้ใช้เรียกผ่าน Kong (:8000) ส่วน /internal/events, /health, /swagger เรียก service ตรง (:8084)
+# (ถ้ารันแบบ go run กับ auth-service/docker-compose.yml ให้เปลี่ยน baseUrl เป็น :8084 และ authUrl เป็น :8081)
+#
+# ใช้ token จริงจาก Keycloak (realm unibook) — token มีอายุ 15 นาที ถ้าได้ 401 "invalid token" ให้กด login ใหม่
+# บัญชีทดสอบ (เฉพาะเครื่อง dev): uniadmin มากับ keycloak/unibook-realm.json ส่วน user1/user2/staff1 สร้างในหมวด SETUP
+
+@baseUrl = http://localhost:8000
+@authUrl = http://localhost:8000
+@directUrl = http://localhost:8084
+@tokenUrl = http://localhost:8080/realms/unibook/protocol/openid-connect/token
+@testPassword = Test@12345
+@internalKey = dev-internal-key
+
+### Health check (ไม่ต้องใช้ token)
+GET {{directUrl}}/health
+
+# ========== SETUP (ทำครั้งแรกครั้งเดียว — ถ้ากดซ้ำจะได้ 409 already exists ซึ่งไม่เป็นไร) ==========
+
+### สมัคร user1 (role USER)
+POST {{authUrl}}/api/auth/register
+Content-Type: application/json
+
+{ "username": "user1", "email": "user1@unibook.local", "password": "{{testPassword}}", "first_name": "User", "last_name": "One" }
+
+### สมัคร user2 (role USER)
+POST {{authUrl}}/api/auth/register
+Content-Type: application/json
+
+{ "username": "user2", "email": "user2@unibook.local", "password": "{{testPassword}}", "first_name": "User", "last_name": "Two" }
+
+### สมัคร staff1 (สมัครได้แค่ USER ก่อน แล้วให้ admin เปลี่ยนเป็น STAFF ด้านล่าง)
+# @name registerStaff
+POST {{authUrl}}/api/auth/register
+Content-Type: application/json
+
+{ "username": "staff1", "email": "staff1@unibook.local", "password": "{{testPassword}}", "first_name": "Staff", "last_name": "One" }
+
+### admin เปลี่ยน staff1 เป็น STAFF (กด "login admin" ด้านล่างก่อน)
+PUT {{authUrl}}/api/users/{{registerStaff.response.body.id}}/role
+Authorization: Bearer {{admin.response.body.access_token}}
+Content-Type: application/json
+
+{ "role": "STAFF" }
+
+# ========== LOGIN (กดใหม่ทุก 15 นาที) ==========
+
+### login admin (uniadmin)
+# @name admin
+POST {{tokenUrl}}
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=password&client_id=unibook-frontend&username=uniadmin&password=UniAdmin@1234
+
+### login staff1
+# @name staff
+POST {{tokenUrl}}
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=password&client_id=unibook-frontend&username=staff1&password={{testPassword}}
+
+### login user1
+# @name user1
+POST {{tokenUrl}}
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=password&client_id=unibook-frontend&username=user1&password={{testPassword}}
+
+### login user2
+# @name user2
+POST {{tokenUrl}}
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=password&client_id=unibook-frontend&username=user2&password={{testPassword}}
+
+### ดู users.id ของ user1 (ใช้เป็น user_id ตอนสร้าง notification)
+# @name me1
+GET {{authUrl}}/api/users/me
+Authorization: Bearer {{user1.response.body.access_token}}
+
+### ดู users.id ของ user2
+# @name me2
+GET {{authUrl}}/api/users/me
+Authorization: Bearer {{user2.response.body.access_token}}
+
+# ========== 1. Create ==========
+
+### [201] STAFF สร้าง notification ให้ user1
+# @name created
+POST {{baseUrl}}/api/notifications
+Authorization: Bearer {{staff.response.body.access_token}}
+Content-Type: application/json
+
+{ "user_id": {{me1.response.body.id}}, "title": "ห้อง 301 ปิดปรับปรุง", "message": "ปิดวันศุกร์นี้", "type": "GENERAL" }
+
+### [201] ADMIN สร้าง notification ให้ user2
+POST {{baseUrl}}/api/notifications
+Authorization: Bearer {{admin.response.body.access_token}}
+Content-Type: application/json
+
+{ "user_id": {{me2.response.body.id}}, "title": "ของ user2", "message": "user1 ต้องมองไม่เห็นรายการนี้" }
+
+### [403] USER สร้างไม่ได้
+POST {{baseUrl}}/api/notifications
+Authorization: Bearer {{user1.response.body.access_token}}
+Content-Type: application/json
+
+{ "user_id": {{me1.response.body.id}}, "title": "ทดสอบ", "message": "ทดสอบ" }
+
+### [400] user_id ไม่มีอยู่จริงใน auth-service
+POST {{baseUrl}}/api/notifications
+Authorization: Bearer {{staff.response.body.access_token}}
+Content-Type: application/json
+
+{ "user_id": 999999, "title": "ทดสอบ", "message": "ทดสอบ" }
+
+### [400] ไม่มี title
+POST {{baseUrl}}/api/notifications
+Authorization: Bearer {{staff.response.body.access_token}}
+Content-Type: application/json
+
+{ "user_id": {{me1.response.body.id}}, "message": "ไม่มีหัวข้อ" }
+
+### [400] type ไม่ถูกต้อง
+POST {{baseUrl}}/api/notifications
+Authorization: Bearer {{staff.response.body.access_token}}
+Content-Type: application/json
+
+{ "user_id": {{me1.response.body.id}}, "title": "ทดสอบ", "message": "ทดสอบ", "type": "XYZ" }
+
+### [401] ไม่มี token
+POST {{baseUrl}}/api/notifications
+Content-Type: application/json
+
+{ "user_id": 1, "title": "ทดสอบ", "message": "ทดสอบ" }
+
+# ========== 2. List ==========
+
+### [200] user1 ดูของตัวเองทั้งหมด
+GET {{baseUrl}}/api/notifications
+Authorization: Bearer {{user1.response.body.access_token}}
+
+### [200] user1 ดูพร้อม filter + pagination
+GET {{baseUrl}}/api/notifications?page=1&limit=10&is_read=false&type=GENERAL
+Authorization: Bearer {{user1.response.body.access_token}}
+
+### [200] user2 ต้องเห็นแค่ของ user2
+GET {{baseUrl}}/api/notifications
+Authorization: Bearer {{user2.response.body.access_token}}
+
+### [400] is_read ผิดรูปแบบ
+GET {{baseUrl}}/api/notifications?is_read=abc
+Authorization: Bearer {{user1.response.body.access_token}}
+
+### [401] token ปลอม
+GET {{baseUrl}}/api/notifications
+Authorization: Bearer not-a-real-token
+
+# ========== 3–5. Read one / Mark as read / Delete (ใช้ id จาก "STAFF สร้าง notification ให้ user1") ==========
+
+### [200] user1 ดูรายการของตัวเอง
+GET {{baseUrl}}/api/notifications/{{created.response.body.id}}
+Authorization: Bearer {{user1.response.body.access_token}}
+
+### [403] user2 ดูของ user1 ไม่ได้
+GET {{baseUrl}}/api/notifications/{{created.response.body.id}}
+Authorization: Bearer {{user2.response.body.access_token}}
+
+### [200] user1 mark as read → is_read = true
+PUT {{baseUrl}}/api/notifications/{{created.response.body.id}}/read
+Authorization: Bearer {{user1.response.body.access_token}}
+
+### [403] user2 mark as read ของ user1 ไม่ได้
+PUT {{baseUrl}}/api/notifications/{{created.response.body.id}}/read
+Authorization: Bearer {{user2.response.body.access_token}}
+
+### [403] user2 ลบของ user1 ไม่ได้
+DELETE {{baseUrl}}/api/notifications/{{created.response.body.id}}
+Authorization: Bearer {{user2.response.body.access_token}}
+
+### [200] user1 ลบของตัวเอง
+DELETE {{baseUrl}}/api/notifications/{{created.response.body.id}}
+Authorization: Bearer {{user1.response.body.access_token}}
+
+### [404] ลบซ้ำ → ไม่มีแล้ว
+DELETE {{baseUrl}}/api/notifications/{{created.response.body.id}}
+Authorization: Bearer {{user1.response.body.access_token}}
+
+### [400] id ไม่ใช่ตัวเลข
+GET {{baseUrl}}/api/notifications/abc
+Authorization: Bearer {{user1.response.body.access_token}}
+
+# ========== 6. Event จาก Booking Service (ใช้ X-Internal-Key แทน token) ==========
+
+### [201] booking.created → BOOKING_CREATED ให้ user1
+POST {{directUrl}}/internal/events
+X-Internal-Key: {{internalKey}}
+Content-Type: application/json
+
+{ "event": "booking.created", "booking_id": 12, "user_id": {{me1.response.body.id}}, "facility_id": 3, "facility_name": "ห้อง 301", "date": "2026-10-01", "start_time": "09:00", "end_time": "11:00" }
+
+### [201] booking.approved → BOOKING_APPROVED ให้ user1
+POST {{directUrl}}/internal/events
+X-Internal-Key: {{internalKey}}
+Content-Type: application/json
+
+{ "event": "booking.approved", "booking_id": 12, "user_id": {{me1.response.body.id}}, "facility_name": "ห้อง 301", "date": "2026-10-01", "start_time": "09:00", "end_time": "11:00" }
+
+### [201] booking.rejected → BOOKING_REJECTED ให้ user1
+POST {{directUrl}}/internal/events
+X-Internal-Key: {{internalKey}}
+Content-Type: application/json
+
+{ "event": "booking.rejected", "booking_id": 13, "user_id": {{me1.response.body.id}}, "facility_id": 5, "reject_reason": "ห้องปิดปรับปรุง" }
+
+### [400] event ที่ไม่รองรับ
+POST {{directUrl}}/internal/events
+X-Internal-Key: {{internalKey}}
+Content-Type: application/json
+
+{ "event": "booking.cancelled", "booking_id": 12, "user_id": 1 }
+
+### [401] internal key ผิด
+POST {{directUrl}}/internal/events
+X-Internal-Key: wrong-key
+Content-Type: application/json
+
+{ "event": "booking.created", "booking_id": 12, "user_id": 1 }
+
+# ========== 7. Report (ADMIN only) ==========
+
+### [200] ADMIN ดูสรุปสถิติ
+GET {{baseUrl}}/api/reports/notifications/summary
+Authorization: Bearer {{admin.response.body.access_token}}
+
+### [403] STAFF ดูไม่ได้
+GET {{baseUrl}}/api/reports/notifications/summary
+Authorization: Bearer {{staff.response.body.access_token}}
+
+### [403] USER ดูไม่ได้
+GET {{baseUrl}}/api/reports/notifications/summary
+Authorization: Bearer {{user1.response.body.access_token}}

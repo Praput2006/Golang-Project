@@ -1,0 +1,203 @@
+openapi: 3.0.3
+info:
+  title: Notification Service
+  version: 1.0.0
+  description: |
+    University Facility Booking System — Notification Service (ผู้รับผิดชอบ: นางสาววริสรา แย้มไสย)
+
+    login ผ่าน Keycloak (realm `unibook`) แล้วนำ access token มาใส่ปุ่ม **Authorize** (bearerAuth)
+    role อ่านจาก `realm_access.roles` ใน token (USER / STAFF / ADMIN)
+
+    `user_id` คือ `users.id` ใน auth_db — service หา id ของคนที่ login โดยเรียก `GET /api/users/me` ของ Auth & User Service
+    ทุก role (รวม ADMIN) ดู/อ่าน/ลบได้เฉพาะ notification ของตัวเอง
+servers:
+  - { url: http://localhost:8084, description: เรียก service ตรง }
+  - { url: http://localhost:8000, description: เรียกผ่าน Kong API Gateway (ยกเว้น /internal) }
+
+paths:
+  /api/notifications:
+    post:
+      tags: [Notifications]
+      summary: Staff/Admin ส่ง Notification (หมวด 1 Create)
+      description: |
+        สร้าง notification ให้ user ที่ระบุ — ตรวจว่ามี `user_id` จริงผ่าน `GET /api/users/:id` ของ auth-service
+        ถ้าไม่ส่ง `type` จะเป็น `GENERAL`
+      security: [{ bearerAuth: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateNotificationRequest' } } } }
+      responses:
+        '201': { $ref: '#/components/responses/Notification' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+    get:
+      tags: [Notifications]
+      summary: ดู Notification ของตัวเอง (หมวด 2 List)
+      description: เห็นเฉพาะของคนที่ login เรียงจากใหม่ไปเก่า
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: is_read, in: query, description: กรองอ่านแล้ว/ยังไม่อ่าน, schema: { type: boolean } }
+        - { name: type, in: query, schema: { $ref: '#/components/schemas/NotificationType' } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 10, maximum: 100 } }
+      responses:
+        '200': { description: รายการ Notification, content: { application/json: { schema: { $ref: '#/components/schemas/NotificationList' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+
+  /api/notifications/{id}:
+    parameters: [{ $ref: '#/components/parameters/NotificationID' }]
+    get:
+      tags: [Notifications]
+      summary: ดู Notification รายการเดียว (หมวด 3 Read one)
+      description: เจ้าของเท่านั้น — ของคนอื่นตอบ 403
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/Notification' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Notifications]
+      summary: ลบ Notification ของตัวเอง (หมวด 5 Delete)
+      description: เจ้าของเท่านั้น — ลบจริงออกจากฐานข้อมูล (hard delete)
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: ลบแล้ว, content: { application/json: { schema: { $ref: '#/components/schemas/Message' } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+
+  /api/notifications/{id}/read:
+    parameters: [{ $ref: '#/components/parameters/NotificationID' }]
+    put:
+      tags: [Notifications]
+      summary: เปลี่ยนสถานะเป็นอ่านแล้ว (หมวด 4 Update)
+      description: เจ้าของเท่านั้น — ถ้าอ่านแล้วอยู่แล้วตอบ 200 โดยไม่เปลี่ยนอะไร
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { $ref: '#/components/responses/Notification' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '502': { $ref: '#/components/responses/Error' }
+
+  /internal/events:
+    post:
+      tags: [Internal]
+      summary: รับ event จาก Booking Service (หมวด 6 Special — Event-driven)
+      description: |
+        Booking Service เรียกเมื่อการจองถูกสร้าง/อนุมัติ/ปฏิเสธ แล้วสร้าง notification ให้เจ้าของการจองอัตโนมัติ
+        - `booking.created` → `BOOKING_CREATED`
+        - `booking.approved` → `BOOKING_APPROVED`
+        - `booking.rejected` → `BOOKING_REJECTED` (แนบ `reject_reason`)
+
+        **service-to-service เท่านั้น** — ไม่เปิดผ่าน Kong ใช้ header `X-Internal-Key` แทน token (รายละเอียดใน EVENTS.md)
+      security: [{ internalKey: [] }]
+      servers:
+        - { url: http://localhost:8084, description: เรียก service ตรง (ใน Docker ใช้ http://notification-service:8084) }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/BookingEventRequest' } } } }
+      responses:
+        '201': { $ref: '#/components/responses/Notification' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /api/reports/notifications/summary:
+    get:
+      tags: [Reports]
+      summary: Admin ดูสถิติการแจ้งเตือน (หมวด 7 Report)
+      description: นับ notification ทั้งระบบ (ทุก user) ที่ยังไม่ถูกลบ
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: สถิติการแจ้งเตือน, content: { application/json: { schema: { $ref: '#/components/schemas/NotificationSummary' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+    internalKey: { type: apiKey, in: header, name: X-Internal-Key }
+
+  parameters:
+    NotificationID: { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+
+  responses:
+    Notification:
+      description: ข้อมูล Notification
+      content: { application/json: { schema: { $ref: '#/components/schemas/Notification' } } }
+    Error:
+      description: |
+        400 ข้อมูลไม่ถูกต้อง / id ผิด / user_id ไม่มีอยู่ · 401 ไม่มี token, token ไม่ถูกต้อง หรือ internal key ผิด ·
+        403 role ไม่มีสิทธิ์ หรือไม่ใช่เจ้าของ notification · 404 ไม่พบ Notification · 502 เรียก auth-service ไม่สำเร็จ
+      content: { application/json: { schema: { type: object, properties: { error: { type: string } } } } }
+
+  schemas:
+    NotificationType:
+      type: string
+      enum: [GENERAL, BOOKING_CREATED, BOOKING_APPROVED, BOOKING_REJECTED, BOOKING_CANCELLED]
+
+    Notification:
+      type: object
+      properties:
+        id: { type: integer, example: 1 }
+        user_id: { type: integer, description: users.id ใน auth_db (ผู้รับ), example: 2 }
+        title: { type: string, maxLength: 100, example: การจองได้รับการอนุมัติ }
+        message: { type: string, example: "การจอง #12 (ห้อง 301 วันที่ 2026-10-01 เวลา 09:00-11:00) ได้รับการอนุมัติแล้ว" }
+        type: { $ref: '#/components/schemas/NotificationType' }
+        is_read: { type: boolean, example: false }
+        created_at: { type: string, format: date-time }
+
+    CreateNotificationRequest:
+      type: object
+      required: [user_id, title, message]
+      properties:
+        user_id: { type: integer, minimum: 1, example: 2 }
+        title: { type: string, maxLength: 100, example: ห้อง 301 ปิดปรับปรุง }
+        message: { type: string, example: ปิดวันศุกร์นี้ }
+        type: { allOf: [{ $ref: '#/components/schemas/NotificationType' }], default: GENERAL }
+
+    BookingEventRequest:
+      type: object
+      required: [event, booking_id, user_id]
+      properties:
+        event: { type: string, enum: [booking.created, booking.approved, booking.rejected] }
+        booking_id: { type: integer, minimum: 1, example: 12 }
+        user_id: { type: integer, minimum: 1, description: เจ้าของการจอง (bookings.user_id), example: 2 }
+        facility_id: { type: integer, example: 3 }
+        facility_name: { type: string, example: ห้อง 301 }
+        date: { type: string, example: '2026-10-01' }
+        start_time: { type: string, example: '09:00' }
+        end_time: { type: string, example: '11:00' }
+        reject_reason: { type: string, description: ใช้กับ booking.rejected, example: ห้องปิดปรับปรุง }
+
+    NotificationList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Notification' } }
+        page: { type: integer, example: 1 }
+        limit: { type: integer, example: 10 }
+        total: { type: integer, example: 3 }
+
+    NotificationSummary:
+      type: object
+      properties:
+        total: { type: integer, example: 120 }
+        read: { type: integer, example: 80 }
+        unread: { type: integer, example: 40 }
+        read_rate: { type: number, description: เปอร์เซ็นต์ที่อ่านแล้ว, example: 66.67 }
+        by_type:
+          type: object
+          additionalProperties: { type: integer }
+          example: { GENERAL: 10, BOOKING_CREATED: 50, BOOKING_APPROVED: 35, BOOKING_REJECTED: 20, BOOKING_CANCELLED: 5 }
+
+    Message:
+      type: object
+      properties:
+        message: { type: string, example: notification deleted }
